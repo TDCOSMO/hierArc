@@ -1,4 +1,4 @@
-from hierarc.LensPosterior.kin_constraints import KinConstraints
+from hierarc.LensPosterior.kin_constraints import KinConstraints, min_q_intrinsic
 from hierarc.Likelihood.hierarchy_likelihood import LensLikelihood
 from lenstronomy.Analysis.kinematics_api import KinematicsAPI
 from lenstronomy.Util.param_util import phi_q2_ellipticity
@@ -400,11 +400,16 @@ class TestKinConstraints(object):
         ]
         #########
         # q_light = 0.86 but q_mass = 1.0
+        # The inclination is derived from the total mass, so a circular mass carries no
+        # information on the orientation: _get_inclination_angle() warns and returns None,
+        # and the model falls back to the spherical solver. The reference is computed the
+        # same way, i.e. with inclination=None rather than at the inclination the light
+        # alone would imply.
         sigma_v_sph_mass = kin_api.velocity_dispersion(
             kwargs_lens_sph,
             kwargs_lens_light,
             kwargs_anisotropy,
-            inclination=inclination,
+            inclination=None,
             r_eff=r_eff,
             theta_E=theta_E,
             gamma=gamma,
@@ -844,6 +849,86 @@ class TestRaise(object):
                 axial_symmetry="axi_sph",
                 kwargs_lens_light=[{}],  # does not have e1, e2
             )
+
+    def test_min_q_intrinsic(self):
+        # the bound only exists when the component the inclination is *not* derived from
+        # is the flatter one on the sky
+        npt.assert_almost_equal(min_q_intrinsic(q_reference=0.7, q_other=0.9), 0.0)
+        npt.assert_almost_equal(min_q_intrinsic(q_reference=0.7, q_other=0.7), 0.0)
+        # at the bound the other component deprojects to exactly q_intrinsic_min
+        q_mass, q_light, q_c = 0.782, 0.686, 0.05
+        q_min = min_q_intrinsic(q_reference=q_mass, q_other=q_light, q_intrinsic_min=q_c)
+        assert 0 < q_min < q_mass
+        cos_i_squared = (q_mass**2 - q_min**2) / (1 - q_min**2)
+        q_light_intr = np.sqrt(
+            (q_light**2 - cos_i_squared) / (1 - cos_i_squared)
+        )
+        npt.assert_allclose(q_light_intr, q_c, rtol=1e-6)
+        # a flatter mass, or a rounder light, relaxes the bound
+        assert min_q_intrinsic(0.75, 0.686) < q_min
+        assert min_q_intrinsic(q_mass, 0.75) < q_min
+
+    def test_q_intrinsic_min_and_validation(self):
+        kwargs = dict(
+            z_lens=0.5,
+            z_source=1.5,
+            theta_E=1.0,
+            theta_E_error=0.01,
+            gamma=2.1,
+            gamma_error=0.02,
+            r_eff=1.0,
+            r_eff_error=0.05,
+            sigma_v_measured=[200],
+            sigma_v_error_independent=[10],
+            sigma_v_error_covariant=0,
+            kwargs_aperture={},
+            kwargs_seeing={},
+            anisotropy_model="const",
+            kinematics_backend="jampy",
+        )
+        e1, e2 = phi_q2_ellipticity(0, 0.686)
+        kwargs_lens_light = [{"amp": 1.0, "Rs": 1.0, "e1": e1, "e2": e2}]
+
+        # mass rounder than the light -> the light bounds q_intrinsic from below
+        kin = KinConstraints(
+            axial_symmetry="axi_sph",
+            q_total_mass=0.782,
+            kwargs_lens_light=kwargs_lens_light,
+            **kwargs
+        )
+        npt.assert_allclose(kin.q_intrinsic_min, min_q_intrinsic(0.782, 0.686), rtol=1e-9)
+        with pytest.raises(ValueError, match="below the smallest value"):
+            kin._validate_deprojection(kin.q_intrinsic_min - 0.05)
+        kin._validate_deprojection(kin.q_intrinsic_min + 0.05)  # inside the range
+        kin._validate_deprojection(1.0)  # spherical special case, always allowed
+
+        # mass flatter than the light, and mass following the light: no bound
+        for q_total_mass in (0.6, None):
+            kin = KinConstraints(
+                axial_symmetry="axi_sph",
+                q_total_mass=q_total_mass,
+                kwargs_lens_light=kwargs_lens_light,
+                **kwargs
+            )
+            assert kin.q_intrinsic_min == 0.0
+            kin._validate_deprojection(0.2)
+
+        # a circular total mass falls back to the spherical solver: no bound either
+        with pytest.warns(UserWarning, match="inclination"):
+            kin = KinConstraints(
+                axial_symmetry="axi_sph",
+                q_total_mass=1.0,
+                kwargs_lens_light=kwargs_lens_light,
+                **kwargs
+            )
+            assert kin.q_intrinsic_min == 0.0
+            kin._validate_deprojection(0.2)
+            assert kin._get_inclination_angle(q_obs=1.0, q_intrinsic=0.8) is None
+
+        # spherical modelling never deprojects
+        kin = KinConstraints(axial_symmetry="spherical", **kwargs)
+        assert kin.q_intrinsic_min == 0.0
+        kin._validate_deprojection(0.1)
 
     def test_warn_inclination(self):
         with pytest.warns(UserWarning, match="inclination"):
