@@ -235,9 +235,9 @@ class KinConstraints(BaseLensConfig):
             {"theta_E": theta_E_draw, "gamma": gamma_draw}
             | self._kwargs_mass_geometry
         ]
-        # get the inclination angle from the light axial ratio
+        # get the inclination angle from the mass axial ratio
         inclination = self._get_inclination_angle(
-            q_obs=self._q_light, q_intrinsic=q_intrinsic
+            q_obs=self._q_mass, q_intrinsic=q_intrinsic
         )
         j_kin = self.velocity_dispersion_map_dimension_less(
             kwargs_lens=kwargs_lens,
