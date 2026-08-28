@@ -35,6 +35,14 @@ def min_q_intrinsic(q_reference, q_other, q_intrinsic_min=Q_INTRINSIC_MIN_JAM):
     """
     if q_other >= q_reference:
         return 0.0
+    if q_other <= q_intrinsic_min:
+        # the deprojection can only make a component flatter (q_intr = q_obs edge-on, less
+        # otherwise), so a component observed flatter than q_intrinsic_min has no valid
+        # deprojection at any inclination and no bound would rescue it
+        raise ValueError(
+            "the flatter component is observed at q=%s, at or below the minimum intrinsic "
+            "axis ratio %s: no inclination can deproject it." % (q_other, q_intrinsic_min)
+        )
     c_max = (q_other**2 - q_intrinsic_min**2) / (1 - q_intrinsic_min**2)
     return float(np.sqrt(max((q_reference**2 - c_max) / (1 - c_max), 0.0)))
 
