@@ -14,7 +14,8 @@ class SneLikelihood(object):
     def __init__(self, sample_name="CUSTOM", **kwargs_sne_likelihood):
         """
 
-        :param sample_name: string, either 'CUSTOM' or a specific name supported by SneLikelihoodFromFile() class
+        :param sample_name: string, either 'CUSTOM', 'PantheonPlus', 'DES5YR', 'DES5YR_Dovekie' or a specific
+            name supported by SneLikelihoodFromFile() class
         :param kwargs_sne_likelihood: keyword arguments to initiate likelihood class
         """
         if sample_name == "CUSTOM":
@@ -36,6 +37,19 @@ class SneLikelihood(object):
             from hierarc.Likelihood.SneLikelihood.des_5yr import DES5YRData
 
             data = DES5YRData()
+            mag_mean = data.mu_obs
+            cov_mag = data.cov_mag_b
+            zhel = data.zHEL
+            zcmb = data.zCMB
+            self._likelihood = CustomSneLikelihood(
+                mag_mean, cov_mag, zhel, zcmb, no_intrinsic_scatter=True
+            )
+        elif sample_name == "DES5YR_Dovekie":
+            from hierarc.Likelihood.SneLikelihood.des_5yr_dovekie import (
+                DES5YRDovekieData,
+            )
+
+            data = DES5YRDovekieData()
             mag_mean = data.mu_obs
             cov_mag = data.cov_mag_b
             zhel = data.zHEL
