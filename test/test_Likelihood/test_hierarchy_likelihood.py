@@ -1,6 +1,7 @@
 from hierarc.Likelihood.hierarchy_likelihood import LensLikelihood
 from astropy.cosmology import FlatLambdaCDM
 import pytest
+import warnings
 import numpy as np
 import numpy.testing as npt
 from lenstronomy.Util.data_util import magnitude2cps
@@ -522,6 +523,36 @@ class TestRaise:
                 q_intrinsic_sampling=True,
                 axisymmetric_correction_distributions=np.random.random(size=3),
             )
+
+    def test_nan_log_likelihood_is_rejected(self):
+        """A NaN likelihood must be rejected, not turned into a likelihood peak.
+
+        np.nan_to_num() maps NaN to 0, which is the highest value a log likelihood can
+        take, so an unguarded NaN would be preferred over every valid model.
+        """
+        likelihood = LensLikelihood(
+            z_lens=0.5,
+            z_source=1.5,
+            name="NaNLens",
+            likelihood_type="DdtDdGaussian",
+            ddt_mean=1,
+            ddt_sigma=0.1,
+            dd_mean=1,
+            dd_sigma=0.1,
+        )
+        likelihood.hyper_param_likelihood = lambda *args, **kwargs: np.nan
+        cosmo = FlatLambdaCDM(H0=70, Om0=0.3)
+
+        with pytest.warns(UserWarning, match="NaN log likelihood for lens NaNLens"):
+            logl = likelihood.lens_log_likelihood(cosmo=cosmo)
+        # -inf is passed through np.nan_to_num, as an out-of-bounds model already is
+        assert logl == np.nan_to_num(-np.inf)
+        assert logl < 0
+
+        # the warning is raised once per lens, not once per evaluation
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert likelihood.lens_log_likelihood(cosmo=cosmo) == logl
 
 
 if __name__ == "__main__":

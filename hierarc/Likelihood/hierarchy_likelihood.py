@@ -13,6 +13,7 @@ from hierarc.Util.distribution_util import PDFSampling, DistributionSampling
 from hierarc.Sampling.Distributions.lens_distribution import LensDistribution
 import numpy as np
 import copy
+import warnings
 
 
 class LensLikelihood(TransformedCosmography, LensLikelihoodBase, KinScaling):
@@ -231,6 +232,8 @@ class LensLikelihood(TransformedCosmography, LensLikelihoodBase, KinScaling):
                 "If using spherical modeling with axisymmetric correction, set q_intrinsic_sampling to False. "
                 "If using axisymmetric modeling, unset the axisymmetric correction distribution."
             )
+        # a NaN likelihood is reported once per lens, not once per evaluation
+        self._nan_likelihood_warned = False
 
     def info(self):
         """Information about the lens.
@@ -291,6 +294,22 @@ class LensLikelihood(TransformedCosmography, LensLikelihoodBase, KinScaling):
         )
         if verbose:
             print("log likelihood of lens %s = %s" % (self.name, a))
+        if np.isnan(a):
+            # np.nan_to_num() maps NaN to 0, which for a log likelihood is the *best*
+            # possible value: a NaN would silently turn into a likelihood peak instead of
+            # being rejected. Treat it as -inf, i.e. the same way an impossible model is
+            # treated, and say so once per lens so the cause can be tracked down.
+            if not self._nan_likelihood_warned:
+                self._nan_likelihood_warned = True
+                warnings.warn(
+                    "NaN log likelihood for lens %s; the sample is rejected as if the "
+                    "likelihood were zero. This points at a numerical problem in the "
+                    "model evaluation (e.g. a degenerate covariance or a kinematics "
+                    "scaling that is not defined) and should be investigated."
+                    % self.name,
+                    UserWarning,
+                )
+            a = -np.inf
         return np.nan_to_num(a)
 
     def hyper_param_likelihood(
