@@ -150,6 +150,7 @@ class KinScaling(KinScalingParamManager):
             self._param_arrays = [j_kin_scaling_param_axes]
         self._evaluate_scaling = False
         self._is_log_m2l_population_level = False
+        self._f_ani_stacked = None
         if (
             j_kin_scaling_param_axes is not None
             and j_kin_scaling_grid_list is not None
@@ -164,6 +165,9 @@ class KinScaling(KinScalingParamManager):
                         j_kin_scaling_param_axes, scaling_grid
                     )
                 )
+            self._f_ani_stacked = self._stack_measurements(
+                j_kin_scaling_param_axes, j_kin_scaling_grid_list
+            )
 
         if isinstance(j_kin_scaling_param_axes, list):
             self._dim_scaling = len(j_kin_scaling_param_axes)
@@ -172,6 +176,56 @@ class KinScaling(KinScalingParamManager):
         KinScalingParamManager.__init__(
             self, j_kin_scaling_param_name_list=j_kin_scaling_param_name_list
         )
+
+    @staticmethod
+    def _stack_measurements(param_grid_axes, j_kin_scaling_grid_list):
+        """Build a single interpolator evaluating all measurement bins at once.
+
+        Every bin of a lens is tabulated on the same parameter grid and only the values
+        differ, so the bins can be stacked into one extra (trailing) dimension of the
+        value array and interpolated by a single call. This is purely a performance
+        rewrite of the per-bin loop in :func:`kin_scaling`: the interpolation itself is
+        unchanged, and both paths return the same numbers.
+
+        It matters because the cost of these interpolators is dominated by the
+        per-call Python overhead (argument validation, index search), not by the
+        arithmetic: one call for all bins is ~n_bins times cheaper than one call per
+        bin. The hierarchical likelihood evaluates this once per population draw per
+        lens, so the loop is the hot path of the whole inference.
+
+        Only the 1d (``interp1d``) and >=3d (``RegularGridInterpolator``) cases are
+        stacked. The 2d case uses a ``RectBivariateSpline``, which has no
+        vector-valued form, and keeps the per-bin loop.
+
+        :param param_grid_axes: list of arrays of interpolated parameter values
+        :param j_kin_scaling_grid_list: list of J() grids, one per measurement bin
+        :return: interpolator returning one value per bin, or None if the
+            configuration cannot be stacked
+        """
+        if not isinstance(param_grid_axes, list):
+            param_grid_axes = [param_grid_axes]
+        dim_scaling = len(param_grid_axes)
+        if dim_scaling == 2:
+            return None
+        grids = [np.asarray(grid, dtype=float) for grid in j_kin_scaling_grid_list]
+        if len(grids) == 0:
+            return None
+        if any(grid.shape != grids[0].shape for grid in grids):
+            return None
+
+        if dim_scaling == 1:
+            # values of shape (n_bins, n_x), interpolated along the last axis so that a
+            # scalar argument returns one value per bin
+            return interp1d(
+                param_grid_axes[0],
+                np.stack(grids, axis=0),
+                kind="linear",
+                fill_value="extrapolate",
+                axis=-1,
+            )
+        # values of shape (*grid_shape, n_bins): RegularGridInterpolator interpolates
+        # over the leading axes and carries the trailing one through untouched
+        return RegularGridInterpolator(tuple(param_grid_axes), np.stack(grids, axis=-1))
 
     def param_bounds_interpol(self):
         """Minimum and maximum bounds of parameters that are being used to call
@@ -197,6 +251,11 @@ class KinScaling(KinScalingParamManager):
         param_array = self.kwargs2param_array(kwargs_param)
         if self._evaluate_scaling is not True or len(param_array) == 0:
             return np.ones(self._dim_scaling)
+        if self._f_ani_stacked is not None:
+            # all bins in one interpolator call (see _stack_measurements)
+            if self._dim_scaling == 1:
+                return self._f_ani_stacked(param_array[0])
+            return self._f_ani_stacked(param_array)[0]
         scaling_list = []
         for scaling_class in self._j_scaling_ifu:
             scaling = scaling_class.j_scaling(param_array)
