@@ -234,27 +234,41 @@ class QuadratureMarginalisation(object):
             if aniso._distribution_function == "GAUSSIAN_SCALED":
                 a_sigma = a_sigma * a_mean
             if aniso._parametrization == "TAN_RAD":
-                a_max = np.sqrt(max(1.0 - aniso._a_ani_min, 0.0))
-                edges = {-a_max, a_max}
+                # beta = 1 - a^2, so restricting beta to [beta_min, beta_max] allows
+                # sqrt(1 - beta_max) <= |a| <= sqrt(1 - beta_min): one band if
+                # beta_max >= 1, otherwise two, with a hole around a = 0. Getting this
+                # wrong puts nodes outside the interpolation grid.
+                a_outer = np.sqrt(max(1.0 - aniso._a_ani_min, 0.0))
+                a_inner = np.sqrt(max(1.0 - aniso._a_ani_max, 0.0))
+                if a_inner > 0:
+                    intervals = [(-a_outer, -a_inner), (a_inner, a_outer)]
+                else:
+                    intervals = [(-a_outer, a_outer)]
+                kinks = []
                 for grid_value in self._beta_grid:
                     radicand = 1.0 - grid_value
                     if radicand >= 0:
                         root = np.sqrt(radicand)
-                        if -a_max < root < a_max:
-                            edges.update({root, -root})
+                        kinks.extend([root, -root])
                 a_nodes, beta_weights = truncated_normal_panels(
-                    sorted(edges), a_mean, a_sigma, self._n_gauss, self._panel_mass_tol
+                    intervals,
+                    a_mean,
+                    a_sigma,
+                    self._n_gauss,
+                    interior_edges=kinks,
+                    mass_tol=self._panel_mass_tol,
                 )
-                beta_nodes = 1.0 - a_nodes**2
+                beta_nodes = np.clip(
+                    1.0 - a_nodes**2, aniso._a_ani_min, aniso._a_ani_max
+                )
             else:
-                edges = {aniso._a_ani_min, aniso._a_ani_max}
-                edges.update(
-                    g
-                    for g in self._beta_grid
-                    if aniso._a_ani_min < g < aniso._a_ani_max
-                )
                 beta_nodes, beta_weights = truncated_normal_panels(
-                    sorted(edges), a_mean, a_sigma, self._n_gauss, self._panel_mass_tol
+                    [(aniso._a_ani_min, aniso._a_ani_max)],
+                    a_mean,
+                    a_sigma,
+                    self._n_gauss,
+                    interior_edges=self._beta_grid,
+                    mass_tol=self._panel_mass_tol,
                 )
 
         # --- deprojection
@@ -266,12 +280,13 @@ class QuadratureMarginalisation(object):
             q_sigma = kwargs_kin.get("q_intrinsic_sigma", 0.0)
             if deproj._distribution_function == "GAUSSIAN_SCALED":
                 q_sigma = q_sigma * q_mean
-            edges = {deproj._q_min, deproj._q_max}
-            edges.update(
-                g for g in self._q_grid if deproj._q_min < g < deproj._q_max
-            )
             q_nodes, q_weights = truncated_normal_panels(
-                sorted(edges), q_mean, q_sigma, self._n_gauss, self._panel_mass_tol
+                [(deproj._q_min, deproj._q_max)],
+                q_mean,
+                q_sigma,
+                self._n_gauss,
+                interior_edges=self._q_grid,
+                mass_tol=self._panel_mass_tol,
             )
         return beta_nodes, beta_weights, q_nodes, q_weights
 

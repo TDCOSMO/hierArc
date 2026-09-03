@@ -73,7 +73,9 @@ DDT, DD = 3000.0, 1200.0
 
 class TestQuadratureUtil(object):
     def test_truncated_normal_panels(self):
-        nodes, weights = truncated_normal_panels([-6, -1, 0, 2, 6], 0.2, 0.7, 8)
+        nodes, weights = truncated_normal_panels(
+            [(-6, 6)], 0.2, 0.7, 8, interior_edges=[-1, 0, 2]
+        )
         npt = np.testing
         npt.assert_almost_equal(np.sum(weights), 1.0, decimal=6)
         npt.assert_almost_equal(np.sum(weights * nodes), 0.2, decimal=5)
@@ -83,12 +85,29 @@ class TestQuadratureUtil(object):
 
     def test_truncated_normal_panels_drops_empty(self):
         # a panel 40 sigma away holds no mass and should not contribute nodes
-        many, _ = truncated_normal_panels([-50, -40, -3, 3], 0.0, 1.0, 4, mass_tol=0)
-        few, _ = truncated_normal_panels([-50, -40, -3, 3], 0.0, 1.0, 4, mass_tol=1e-8)
+        edges = [-40, -3]
+        many, _ = truncated_normal_panels(
+            [(-50, 3)], 0.0, 1.0, 4, interior_edges=edges, mass_tol=0
+        )
+        few, _ = truncated_normal_panels(
+            [(-50, 3)], 0.0, 1.0, 4, interior_edges=edges, mass_tol=1e-8
+        )
         assert len(few) < len(many)
 
+    def test_truncated_normal_panels_disjoint_bands(self):
+        """beta = 1 - a^2 with beta_max < 1 leaves a hole around a = 0."""
+        a_outer, a_inner = np.sqrt(1.5), np.sqrt(0.5)
+        nodes, weights = truncated_normal_panels(
+            [(-a_outer, -a_inner), (a_inner, a_outer)], 1.0, 0.4, 6
+        )
+        np.testing.assert_almost_equal(np.sum(weights), 1.0, decimal=8)
+        assert np.all(np.abs(nodes) >= a_inner - 1e-12)
+        assert np.all(np.abs(nodes) <= a_outer + 1e-12)
+        beta = 1.0 - nodes**2
+        assert beta.min() >= -0.5 - 1e-12 and beta.max() <= 0.5 + 1e-12
+
     def test_truncated_normal_panels_zero_sigma(self):
-        nodes, weights = truncated_normal_panels([-1, 1], 0.3, 0.0, 4)
+        nodes, weights = truncated_normal_panels([(-1, 1)], 0.3, 0.0, 4)
         assert nodes == pytest.approx([0.3])
         assert weights == pytest.approx([1.0])
 
@@ -240,6 +259,48 @@ class TestQuadratureMarginalisation(object):
         value_mc = mc.hyper_param_likelihood(DDT, DD, 0, beta_dsp=None, **args)
         value_quad = quad.hyper_param_likelihood(DDT, DD, 0, beta_dsp=None, **args)
         assert abs(value_mc - value_quad) < 0.05
+
+    def test_restricted_beta_grid_large_scatter(self):
+        """A beta grid that stops below 1 forbids a band of a; nodes must respect it.
+
+        With beta = 1 - a^2 restricted to [-0.5, 0.5], only
+        sqrt(0.5) <= |a| <= sqrt(1.5) is allowed. Placing nodes in the hole around
+        a = 0 sends the interpolator outside its grid, which is what a large
+        sigma(a_ani) would expose.
+        """
+        kwargs = _kwargs_lens()
+        axes = list(kwargs["j_kin_scaling_param_axes"])
+        axes[0] = np.linspace(-0.5, 0.5, 7)
+        kwargs["j_kin_scaling_param_axes"] = axes
+        beta, gamma, q = np.meshgrid(*axes, indexing="ij")
+        kwargs["j_kin_scaling_grid_list"] = [
+            1.0 + 0.3 * (beta + 1) + 0.1 * gamma - 0.2 * q for _ in range(6)
+        ]
+        for sigma in (0.05, 0.4, 1.0):
+            kwargs_kin = dict(
+                a_ani=1.0, a_ani_sigma=sigma, q_intrinsic=0.7, q_intrinsic_sigma=0.08
+            )
+            quad = LensLikelihood(
+                marginalisation="quadrature",
+                kwargs_marginalisation={"n_gauss": 6, "n_lambda_tot": 512},
+                **kwargs
+            )
+            nodes = quad._quadrature._outer_nodes(kwargs_kin)[0]
+            assert nodes.min() >= axes[0][0] - 1e-12
+            assert nodes.max() <= axes[0][-1] + 1e-12
+            value_quad = quad.hyper_param_likelihood(
+                DDT, DD, 0, beta_dsp=None, kwargs_lens=KWARGS_LENS,
+                kwargs_kin=kwargs_kin, kwargs_source={}, kwargs_los=[],
+            )
+            mc = LensLikelihood(**dict(kwargs, num_distribution_draws=40000))
+            np.random.seed(3)
+            value_mc = mc.hyper_param_likelihood(
+                DDT, DD, 0, beta_dsp=None, kwargs_lens=KWARGS_LENS,
+                kwargs_kin=kwargs_kin, kwargs_source={}, kwargs_los=[],
+            )
+            # the rejection sampler draws from the truncated distribution; the
+            # quadrature must integrate against that same truncated density
+            assert abs(value_quad - value_mc) < 0.05
 
     def test_num_nodes(self):
         lens = LensLikelihood(

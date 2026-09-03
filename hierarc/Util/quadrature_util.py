@@ -25,40 +25,61 @@ def gauss_legendre_panels(edges, n_per_panel):
     return (centre + half * x[None, :]).ravel(), (half * w[None, :]).ravel()
 
 
-def truncated_normal_panels(edges, mu, sigma, n_per_panel, mass_tol=1e-8):
-    """Composite Gauss-Legendre rule for a normal density truncated to the panel span.
+def truncated_normal_panels(
+    intervals, mu, sigma, n_per_panel, interior_edges=(), mass_tol=1e-8
+):
+    """Composite Gauss-Legendre rule for a normal density restricted to a set of bands.
 
-    Panels carrying a negligible share of the probability mass are dropped, so the node
-    count adapts to how much of the range the distribution actually occupies.
+    The support may be several disjoint intervals. That is not exotic: when the sampled
+    anisotropy parameter is the tangential-to-radial ratio a and the interpolated
+    quantity is beta = 1 - a^2, restricting beta to [beta_min, beta_max] with
+    beta_max < 1 allows sqrt(1 - beta_max) <= |a| <= sqrt(1 - beta_min), which is two
+    bands with a hole around a = 0.
 
-    :param edges: increasing panel boundaries; the first and last are the truncation
-        bounds. Interior edges should sit wherever the integrand loses smoothness.
+    The weights are normalised over the union of the bands, which is exactly what
+    rejection sampling from the same bounds produces.
+
+    Panels carrying a negligible share of the mass are dropped, so the node count adapts
+    to how much of the support the distribution actually occupies.
+
+    :param intervals: list of (low, high) disjoint intervals, in increasing order
     :param mu: mean of the untruncated normal
     :param sigma: standard deviation of the untruncated normal
     :param n_per_panel: Gauss-Legendre nodes per retained panel
+    :param interior_edges: extra split points; those inside an interval become panel
+        boundaries. Put the interpolation grid nodes here, where the integrand kinks.
     :param mass_tol: drop panels holding less than this fraction of the total mass
     :return: (nodes, weights); the weights sum to one over the retained panels
     """
-    edges = np.asarray(sorted(set(float(e) for e in edges)), dtype=float)
+    intervals = [(float(lo), float(hi)) for lo, hi in intervals if hi > lo]
+    if not intervals:
+        raise ValueError("no non-empty interval was given")
     if sigma <= 0:
         # a delta function: the only sensible rule is the point itself
         return np.array([float(mu)]), np.array([1.0])
-    total = norm.cdf((edges[-1] - mu) / sigma) - norm.cdf((edges[0] - mu) / sigma)
+
+    total = sum(
+        norm.cdf((hi - mu) / sigma) - norm.cdf((lo - mu) / sigma)
+        for lo, hi in intervals
+    )
     if total <= 0:
         raise ValueError(
-            "the truncation interval [%s, %s] carries no probability mass for "
-            "N(%s, %s)" % (edges[0], edges[-1], mu, sigma)
+            "the support %s carries no probability mass for N(%s, %s)"
+            % (intervals, mu, sigma)
         )
     x, w = np.polynomial.legendre.leggauss(int(n_per_panel))
     nodes, weights = [], []
-    for lo, hi in zip(edges[:-1], edges[1:]):
-        mass = norm.cdf((hi - mu) / sigma) - norm.cdf((lo - mu) / sigma)
-        if mass / total < mass_tol:
-            continue
-        centre, half = 0.5 * (lo + hi), 0.5 * (hi - lo)
-        xs = centre + half * x
-        nodes.append(xs)
-        weights.append(half * w * norm.pdf(xs, mu, sigma) / total)
+    for lo, hi in intervals:
+        inner = sorted(e for e in interior_edges if lo < float(e) < hi)
+        edges = np.array([lo] + [float(e) for e in inner] + [hi])
+        for left, right in zip(edges[:-1], edges[1:]):
+            mass = norm.cdf((right - mu) / sigma) - norm.cdf((left - mu) / sigma)
+            if mass / total < mass_tol:
+                continue
+            centre, half = 0.5 * (left + right), 0.5 * (right - left)
+            xs = centre + half * x
+            nodes.append(xs)
+            weights.append(half * w * norm.pdf(xs, mu, sigma) / total)
     if not nodes:
         raise ValueError("every panel was dropped; check mu, sigma and the bounds")
     return np.concatenate(nodes), np.concatenate(weights)
