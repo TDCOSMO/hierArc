@@ -26,7 +26,7 @@ def gauss_legendre_panels(edges, n_per_panel):
 
 
 def truncated_normal_panels(
-    intervals, mu, sigma, n_per_panel, interior_edges=(), mass_tol=1e-8
+    intervals, mu, sigma, n_per_panel, interior_edges=(), mass_tol=1e-8, n_sub=1
 ):
     """Composite Gauss-Legendre rule for a normal density restricted to a set of bands.
 
@@ -49,6 +49,10 @@ def truncated_normal_panels(
     :param interior_edges: extra split points; those inside an interval become panel
         boundaries. Put the interpolation grid nodes here, where the integrand kinks.
     :param mass_tol: drop panels holding less than this fraction of the total mass
+    :param n_sub: split every panel into this many equal sub-panels before applying the
+        Gauss rule. Raising the order inside a wide panel converges only once that panel
+        resolves the integrand; when the peak is narrower than a panel, subdividing is
+        what converges, and it does so monotonically.
     :return: (nodes, weights); the weights sum to one over the retained panels
     """
     intervals = [(float(lo), float(hi)) for lo, hi in intervals if hi > lo]
@@ -71,7 +75,18 @@ def truncated_normal_panels(
     nodes, weights = [], []
     for lo, hi in intervals:
         inner = sorted(e for e in interior_edges if lo < float(e) < hi)
-        edges = np.array([lo] + [float(e) for e in inner] + [hi])
+        coarse = np.array([lo] + [float(e) for e in inner] + [hi])
+        if int(n_sub) > 1:
+            edges = np.unique(
+                np.concatenate(
+                    [
+                        np.linspace(left, right, int(n_sub) + 1)
+                        for left, right in zip(coarse[:-1], coarse[1:])
+                    ]
+                )
+            )
+        else:
+            edges = coarse
         for left, right in zip(edges[:-1], edges[1:]):
             mass = norm.cdf((right - mu) / sigma) - norm.cdf((left - mu) / sigma)
             if mass / total < mass_tol:
