@@ -182,6 +182,35 @@ class DdtHistKDELikelihood(object):
         )
         return log_density - self._norm_factor
 
+    def log_likelihood_vector(self, ddt):
+        """Log likelihood for a whole array of Ddt at once.
+
+        Only available for the Gaussian kernel, where the KDE is a fixed mixture that
+        can be evaluated in one broadcast. Used by the deterministic marginalisation,
+        which needs the Ddt term on a few hundred quadrature nodes at once.
+
+        :param ddt: array of time-delay distances
+        :return: array of log likelihoods
+        :raises NotImplementedError: for a non-Gaussian kernel
+        """
+        if self._kde_centers is None:
+            raise NotImplementedError(
+                "vectorised evaluation is only implemented for the Gaussian kernel"
+            )
+        ddt = np.atleast_1d(np.asarray(ddt, dtype=float))
+        exponent = (
+            self._kde_log_weights[None, :]
+            - 0.5
+            * ((ddt[:, None] - self._kde_centers[None, :]) / self._kde_bandwidth) ** 2
+        )
+        exponent_max = np.max(exponent, axis=1)
+        log_density = (
+            exponent_max
+            + np.log(np.sum(np.exp(exponent - exponent_max[:, None]), axis=1))
+            + self._kde_norm
+        )
+        return log_density - self._norm_factor
+
     def ddt_measurement(self):
         """
 

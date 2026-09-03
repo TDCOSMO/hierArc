@@ -1,7 +1,7 @@
 __author__ = "sibirrer"
 
 from lenstronomy.Util import constants as const
-from scipy.linalg import solve_triangular
+from scipy.linalg import solve_triangular, cholesky, eigh
 import numpy as np
 
 
@@ -41,6 +41,8 @@ class KinLikelihood(object):
         self.num_data = len(j_model)
         self._normalized = normalized
         self._sigma_sys_error_include = sigma_sys_error_include
+        # cached Cholesky of the measurement covariance, which never changes
+        self._chol_meas, self._log_det_meas = None, None
 
     def log_likelihood(
         self,
@@ -90,6 +92,80 @@ class KinLikelihood(object):
                 )
             lnlikelihood -= 1 / 2.0 * (self.num_data * np.log(2 * np.pi) + lndet)
         return lnlikelihood
+
+    def pencil_setup(self, kin_scaling=None, sigma_v_sys_error=None):
+        """Pre-diagonalise the covariance so that Ds/Dds becomes a cheap scalar sweep.
+
+        With the anisotropy/deprojection draw fixed, the covariance of this lens is an
+        affine family in t = Ds/Dds,
+
+            Sigma(t) = C + t M,   M = error_cov_j_sqrt * outer(sqrt(J), sqrt(J)) * c^2,
+
+        because multiplying elementwise by an outer product is a diagonal congruence.
+        The residual is affine in sqrt(t) for the same reason,
+
+            delta(t) = sigma_v_measured - sqrt(t) * s,   s = sqrt(j_model * J) * c.
+
+        Factoring C = L L^T and diagonalising L^-1 M L^-T = Q Lambda Q^T puts *both*
+        matrices in one basis, in which Sigma(t) is diagonal for every t. The quadratic
+        form and the log-determinant then follow in O(n) per value of t rather than an
+        O(n^3) Cholesky each. Because C is the measurement covariance it does not depend
+        on the model at all, so its factor is computed once and cached.
+
+        :param kin_scaling: array of the kinematics scaling J for each measurement bin
+        :param sigma_v_sys_error: optional systematic velocity dispersion error,
+            added in quadrature to the measurement covariance
+        :return: dictionary with 'lambda', 'p', 'r' and 'log_det_c', consumed by
+            :func:`log_likelihood_pencil`
+        """
+        if kin_scaling is None:
+            scaling = np.ones(self.num_data)
+        else:
+            scaling = np.atleast_1d(np.asarray(kin_scaling, dtype=float))
+        cov_meas = self.cov_error_measurement(sigma_v_sys_error)
+        if sigma_v_sys_error is None or not self._sigma_sys_error_include:
+            if self._chol_meas is None:
+                self._chol_meas = cholesky(cov_meas, lower=True)
+                self._log_det_meas = 2.0 * np.sum(np.log(np.diag(self._chol_meas)))
+            chol, log_det_c = self._chol_meas, self._log_det_meas
+        else:
+            chol = cholesky(cov_meas, lower=True)
+            log_det_c = 2.0 * np.sum(np.log(np.diag(chol)))
+
+        root = np.sqrt(np.maximum(scaling, 0.0))
+        m_matrix = self._error_cov_j_sqrt * np.outer(root, root) * (const.c / 1000) ** 2
+        a_matrix = solve_triangular(chol, m_matrix, lower=True)
+        a_matrix = solve_triangular(chol, a_matrix.T, lower=True).T
+        eigenvalues, q_matrix = eigh(0.5 * (a_matrix + a_matrix.T))
+        s_vector = np.sqrt(np.maximum(self._j_model * scaling, 0.0)) * const.c / 1000
+        measured = solve_triangular(chol, self._sigma_v_measured, lower=True)
+        return {
+            "lambda": eigenvalues,
+            "p": q_matrix.T @ measured,
+            "r": q_matrix.T @ solve_triangular(chol, s_vector, lower=True),
+            "log_det_c": log_det_c,
+        }
+
+    def log_likelihood_pencil(self, ds_dds, pencil):
+        """Log likelihood for many values of Ds/Dds at the cost of O(n) each.
+
+        :param ds_dds: scalar or array of Ds/Dds values
+        :param pencil: output of :func:`pencil_setup` for the same kinematics scaling
+        :return: array of log likelihoods, same shape as ``ds_dds``
+        """
+        t = np.atleast_1d(np.asarray(ds_dds, dtype=float))
+        t = np.maximum(t, 0.0)
+        denominator = 1.0 + t[:, None] * pencil["lambda"][None, :]
+        residual = pencil["p"][None, :] - np.sqrt(t)[:, None] * pencil["r"][None, :]
+        numerator = residual**2
+        log_like = -0.5 * np.sum(numerator / denominator, axis=1)
+        if self._normalized is True:
+            log_like -= 0.5 * (
+                self.num_data * np.log(2 * np.pi)
+                + pencil["log_det_c"]
+                + np.sum(np.log(denominator), axis=1)
+            )
+        return log_like
 
     def sigma_v_measurement_mean(self, sigma_v_sys_offset=None):
         """

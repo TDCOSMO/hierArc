@@ -22,6 +22,14 @@ class KinScalingParamManager(object):
         self._num_param = len(self._param_list)
 
     @property
+    def kin_scaling_param_names(self):
+        """Names of the interpolated parameters, in grid order.
+
+        :return: list of str
+        """
+        return list(self._param_list)
+
+    @property
     def num_scaling_dim(self):
         """Number of parameter dimensions for kinematic scaling.
 
@@ -226,6 +234,14 @@ class KinScaling(KinScalingParamManager):
         # values of shape (*grid_shape, n_bins): RegularGridInterpolator interpolates
         # over the leading axes and carries the trailing one through untouched
         return RegularGridInterpolator(tuple(param_grid_axes), np.stack(grids, axis=-1))
+
+    @property
+    def kin_scaling_axes(self):
+        """Interpolation axes of the kinematics scaling, in the same order as the names.
+
+        :return: list of arrays, or None if no scaling is interpolated
+        """
+        return self._param_arrays
 
     def param_bounds_interpol(self):
         """Minimum and maximum bounds of parameters that are being used to call

@@ -71,6 +71,8 @@ class LensLikelihood(TransformedCosmography, LensLikelihoodBase, KinScaling):
         axisymmetric_correction_distributions=None,
         # likelihood evaluation quantities
         num_distribution_draws=50,
+        marginalisation="mc",
+        kwargs_marginalisation=None,
         normalized=True,
         # kappa quantities
         los_distribution_individual=None,
@@ -102,6 +104,17 @@ class LensLikelihood(TransformedCosmography, LensLikelihoodBase, KinScaling):
          measurements.
         :param num_distribution_draws: int, number of distribution draws from the likelihood that are being averaged
          over
+        :param marginalisation: how the latent per-lens parameters are marginalised.
+         "mc" (default) averages over num_distribution_draws random draws. "quadrature"
+         instead integrates with a deterministic rule, which removes the sampling noise
+         in the log likelihood entirely; it covers a restricted set of
+         configurations and raises QuadratureNotApplicable for the others.
+         "quadrature_if_applicable" uses the rule where it applies and falls back
+         to "mc" elsewhere.
+        :type marginalisation: str
+        :param kwargs_marginalisation: settings of the deterministic rule, passed to
+         QuadratureMarginalisation (n_gauss, n_lambda_tot, kappa_sub_bin, ...)
+        :type kwargs_marginalisation: dict or None
         :param global_los_distribution: if integer, will draw from the global kappa distribution specified in that
          integer. If False, will instead draw from the distribution specified in kappa_pdf.
         :type global_los_distribution: bool or integer
@@ -235,6 +248,33 @@ class LensLikelihood(TransformedCosmography, LensLikelihoodBase, KinScaling):
         # a NaN likelihood is reported once per lens, not once per evaluation
         self._nan_likelihood_warned = False
 
+        # optional deterministic marginalisation; the Monte Carlo loop stays the default
+        if marginalisation not in ["mc", "quadrature", "quadrature_if_applicable"]:
+            raise ValueError(
+                "marginalisation '%s' not supported. Chose among 'mc', "
+                "'quadrature' and 'quadrature_if_applicable'." % marginalisation
+            )
+        self._marginalisation = marginalisation
+        self._quadrature = None
+        if marginalisation in ["quadrature", "quadrature_if_applicable"]:
+            from hierarc.Likelihood.quadrature_marginalisation import (
+                QuadratureMarginalisation,
+                QuadratureNotApplicable,
+            )
+
+            try:
+                self._quadrature = QuadratureMarginalisation(
+                    self, **(kwargs_marginalisation or {})
+                )
+            except QuadratureNotApplicable:
+                if marginalisation == "quadrature":
+                    raise
+                warnings.warn(
+                    "quadrature marginalisation does not apply to lens %s; "
+                    "falling back to the Monte Carlo loop for it." % self.name,
+                    UserWarning,
+                )
+
     def info(self):
         """Information about the lens.
 
@@ -346,6 +386,16 @@ class LensLikelihood(TransformedCosmography, LensLikelihoodBase, KinScaling):
         kwargs_source = self._kwargs_init(kwargs_source)
         kwargs_kin_copy = copy.deepcopy(kwargs_kin)
         sigma_v_sys_error = kwargs_kin_copy.pop("sigma_v_sys_error", None)
+
+        if self._quadrature is not None:
+            return self._quadrature.log_likelihood(
+                ddt,
+                dd,
+                kwargs_lens=kwargs_lens,
+                kwargs_kin=kwargs_kin_copy,
+                kwargs_los=kwargs_los,
+                sigma_v_sys_error=sigma_v_sys_error,
+            )
 
         if self.check_dist(
             kwargs_lens, kwargs_kin, kwargs_source, kwargs_los
