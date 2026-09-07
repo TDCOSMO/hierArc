@@ -113,7 +113,9 @@ class LensLikelihood(TransformedCosmography, LensLikelihoodBase, KinScaling):
          to "mc" elsewhere.
         :type marginalisation: str
         :param kwargs_marginalisation: settings of the deterministic rule, passed to
-         QuadratureMarginalisation (n_gauss, n_lambda_tot, kappa_sub_bin, ...)
+         QuadratureMarginalisation. 'n_gauss' is the accuracy dial (Gauss-Legendre nodes
+         per J-grid cell); 'n_sub_panel' subdivides the cells and defaults to 1,
+         which is enough unless a likelihood peak is narrower than one cell.
         :type kwargs_marginalisation: dict or None
         :param global_los_distribution: if integer, will draw from the global kappa distribution specified in that
          integer. If False, will instead draw from the distribution specified in kappa_pdf.

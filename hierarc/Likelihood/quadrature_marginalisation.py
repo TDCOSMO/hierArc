@@ -54,25 +54,26 @@ class QuadratureMarginalisation(object):
         n_gauss=4,
         n_lambda_tot=256,
         kappa_sub_bin=2,
-        n_sub_panel=None,
+        n_sub_panel=1,
         panel_mass_tol=1e-8,
         lambda_sigma_range=7.0,
     ):
         """
 
         :param lens: the ``LensLikelihood`` this rule marginalises
-        :param n_gauss: accuracy dial for the anisotropy and deprojection directions.
-            Each J-grid cell is split into n_gauss sub-panels carrying n_gauss
-            Gauss-Legendre nodes each, so the node count grows as n_gauss^4 and both the
-            panel width and the order improve together. 2 to 4 covers the useful range.
+        :param n_gauss: Gauss-Legendre nodes per panel in the anisotropy and
+            deprojection directions, where a panel is one cell of the J grid. The node
+            count grows as n_gauss^2 and the accuracy improves geometrically as long as
+            the panel resolves the integrand; 3 to 4 covers the useful range.
         :param n_lambda_tot: number of nodes for the lambda_tot sweep. These are
             cheap (O(n) each); a few hundred resolve the Ddt likelihood.
         :param kappa_sub_bin: Gauss-Legendre nodes inside each bin of the external
             convergence histogram
-        :param n_sub_panel: override the sub-panel count, which otherwise follows
-            n_gauss. Raising the order inside a panel converges only once that panel
-            resolves the integrand; for the most sharply constrained lenses the peak is
-            narrower than one J-grid cell, and subdividing is what converges.
+        :param n_sub_panel: split every J-grid cell into this many sub-panels before
+            applying the Gauss rule. The default of 1 leaves the cells intact, which is
+            enough whenever the integrand is resolved by a cell. Raise it only when the
+            likelihood peak is narrower than a cell: order refinement alone does not
+            converge there, while subdividing does, at a cost of n_sub_panel^2 in nodes.
         :param panel_mass_tol: drop panels holding less than this share of the mass
         :param lambda_sigma_range: half-width, in sigma, of the lambda_mst rule
         :raises QuadratureNotApplicable: if the lens configuration is not supported
@@ -82,11 +83,7 @@ class QuadratureMarginalisation(object):
         self._n_gauss = int(n_gauss)
         self._n_lambda_tot = int(n_lambda_tot)
         self._kappa_sub_bin = int(kappa_sub_bin)
-        # h-refinement matters as much as p-refinement here: raising the order inside a
-        # panel only converges once that panel resolves the integrand, and for the most
-        # sharply constrained lenses the peak is narrower than one J-grid cell. Coupling
-        # the two keeps n_gauss a single dial that converges every lens.
-        self._n_sub_panel = int(n_gauss if n_sub_panel is None else n_sub_panel)
+        self._n_sub_panel = int(n_sub_panel)
         self._panel_mass_tol = float(panel_mass_tol)
         self._lambda_sigma_range = float(lambda_sigma_range)
 
