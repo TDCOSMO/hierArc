@@ -11,6 +11,26 @@ import numpy as np
 from scipy.stats import norm
 
 
+def _normal_mass(lo, hi, mu, sigma):
+    """Probability that N(mu, sigma) falls in [lo, hi], without cancelling in the tails.
+
+    Phi saturates at 1 about eight sigma above the mean, so an interval that sits entirely
+    in the upper tail comes out as 1 - 1 = 0 and the caller cannot normalise. The survival
+    function is the accurate side there, and mirrors the lower tail exactly, which pushes
+    the first zero out to the ~38 sigma where the density itself underflows.
+
+    :param lo: lower edge
+    :param hi: upper edge
+    :param mu: mean of the normal
+    :param sigma: standard deviation of the normal
+    :return: the enclosed mass
+    """
+    z_lo, z_hi = (lo - mu) / sigma, (hi - mu) / sigma
+    if z_lo > 0:
+        return norm.sf(z_lo) - norm.sf(z_hi)
+    return norm.cdf(z_hi) - norm.cdf(z_lo)
+
+
 def gauss_legendre_panels(edges, n_per_panel):
     """Composite Gauss-Legendre nodes on a set of consecutive intervals.
 
@@ -62,10 +82,7 @@ def truncated_normal_panels(
         # a delta function: the only sensible rule is the point itself
         return np.array([float(mu)]), np.array([1.0])
 
-    total = sum(
-        norm.cdf((hi - mu) / sigma) - norm.cdf((lo - mu) / sigma)
-        for lo, hi in intervals
-    )
+    total = sum(_normal_mass(lo, hi, mu, sigma) for lo, hi in intervals)
     if total <= 0:
         raise ValueError(
             "the support %s carries no probability mass for N(%s, %s)"
@@ -88,7 +105,7 @@ def truncated_normal_panels(
         else:
             edges = coarse
         for left, right in zip(edges[:-1], edges[1:]):
-            mass = norm.cdf((right - mu) / sigma) - norm.cdf((left - mu) / sigma)
+            mass = _normal_mass(left, right, mu, sigma)
             if mass / total < mass_tol:
                 continue
             centre, half = 0.5 * (left + right), 0.5 * (right - left)
