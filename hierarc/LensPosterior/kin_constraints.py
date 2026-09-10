@@ -7,6 +7,46 @@ from tqdm import tqdm, trange
 import warnings
 
 
+# smallest intrinsic axis ratio jampy accepts when deprojecting an MGE
+# (jampy.axi.jam_axi_proj: qmin = 0.05, 'Inclination too low')
+Q_INTRINSIC_MIN_JAM = 0.05
+
+
+def min_q_intrinsic(q_reference, q_other, q_intrinsic_min=Q_INTRINSIC_MIN_JAM):
+    """Smallest q_intrinsic for which both the light and the total mass can be deprojected.
+
+    The inclination is a property of the galaxy, so the light and the total mass are
+    deprojected at the same angle i, and each of them admits a real deprojection
+    q_intr = sqrt(q_obs^2 - cos^2 i) / sin i only for cos i <= q_obs. The inclination is
+    derived from one of the two (the 'reference', i.e. the total mass, see
+    KinConstraints._get_inclination_angle), so when the other component is *flatter* on
+    the sky it sets a lower bound on q_intrinsic: below it the model asks for an
+    inclination at which the other component would have to be thinner than
+    q_intrinsic_min, which is unphysical and which jampy rejects outright.
+
+    Requiring q_other^2 >= cos^2 i + q_intrinsic_min^2 sin^2 i and substituting
+    cos^2 i = (q_reference^2 - q_intrinsic^2) / (1 - q_intrinsic^2) gives the bound below.
+
+    :param q_reference: observed axis ratio q_intrinsic is defined on (the total mass)
+    :param q_other: observed axis ratio of the other component (the light)
+    :param q_intrinsic_min: smallest intrinsic axis ratio the deprojection may produce
+    :return: lower bound on q_intrinsic; 0 when the reference is the flatter component,
+        in which case the bound is never binding
+    """
+    if q_other >= q_reference:
+        return 0.0
+    if q_other <= q_intrinsic_min:
+        # the deprojection can only make a component flatter (q_intr = q_obs edge-on, less
+        # otherwise), so a component observed flatter than q_intrinsic_min has no valid
+        # deprojection at any inclination and no bound would rescue it
+        raise ValueError(
+            "the flatter component is observed at q=%s, at or below the minimum intrinsic "
+            "axis ratio %s: no inclination can deproject it." % (q_other, q_intrinsic_min)
+        )
+    c_max = (q_other**2 - q_intrinsic_min**2) / (1 - q_intrinsic_min**2)
+    return float(np.sqrt(max((q_reference**2 - c_max) / (1 - c_max), 0.0)))
+
+
 class KinConstraints(BaseLensConfig):
     """Class that manages constraints from Integral Field Unit spectral observations.
 
@@ -236,6 +276,7 @@ class KinConstraints(BaseLensConfig):
             | self._kwargs_mass_geometry
         ]
         # get the inclination angle from the mass axial ratio
+        self._validate_deprojection(q_intrinsic)
         inclination = self._get_inclination_angle(
             q_obs=self._q_mass, q_intrinsic=q_intrinsic
         )
@@ -408,6 +449,51 @@ class KinConstraints(BaseLensConfig):
             compute_for_params(param_array, idx if len(idx) > 1 else idx[0])
 
         return ani_scaling_array_list
+
+    @property
+    def q_intrinsic_min(self):
+        """Lower bound of the physically valid q_intrinsic range for this lens.
+
+        q_intrinsic is defined on the total mass, which is what the inclination is derived
+        from; when the light is flatter on the sky it bounds the inclination and therefore
+        q_intrinsic. Use it to build the q_intrinsic interpolation grid, so that the
+        sampler never explores a range the model cannot represent.
+
+        :return: minimum q_intrinsic, 0 when the light is the rounder component
+        """
+        if self.axial_symmetry == "spherical" or self._q_mass == 1.0:
+            # a circular total mass carries no inclination information, and
+            # _get_inclination_angle() falls back to the spherical solver, which does not
+            # deproject anything: no bound applies
+            return 0.0
+        return min_q_intrinsic(self._q_mass, self._q_light)
+
+    def _validate_deprojection(self, q_intrinsic):
+        """Fail with a physical explanation rather than deep inside jampy.
+
+        :param q_intrinsic: intrinsic axis ratio of the total mass
+        :raises ValueError: if the light cannot be deprojected at the resulting inclination
+        """
+        if self.axial_symmetry == "spherical" or q_intrinsic == 1.0:
+            return
+        q_min = self.q_intrinsic_min
+        if q_intrinsic < q_min:
+            raise ValueError(
+                "q_intrinsic=%.4f is below the smallest value this lens admits (%.4f). "
+                "The inclination is set by the total mass (q_mass=%.4f), and at this "
+                "q_intrinsic it would be low enough that the light (q_light=%.4f), which "
+                "is flatter on the sky, would have to be intrinsically thinner than %.2f "
+                "to project to its observed shape. Restrict the q_intrinsic interpolation "
+                "grid of this lens to [%.4f, 1] (and the sampling bounds with it)."
+                % (
+                    q_intrinsic,
+                    q_min,
+                    self._q_mass,
+                    self._q_light,
+                    Q_INTRINSIC_MIN_JAM,
+                    q_min,
+                )
+            )
 
     def _get_inclination_angle(self, q_obs, q_intrinsic):
         """Compute inclination angle from observed ellipticity and intrinsic axis ratio.

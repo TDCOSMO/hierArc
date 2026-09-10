@@ -12,6 +12,9 @@ class PDFSampling(object):
         :param pdf_array: pdf array of given bins (len(bin_edges)-1)
         """
         assert len(bin_edges) == len(pdf_array) + 1
+        # kept so that a deterministic rule can be built for the same distribution
+        self.bin_edges = np.asarray(bin_edges, dtype=float)
+        self.pdf_array = np.asarray(pdf_array, dtype=float)
         self._cdf_array, self._cdf_func, self._cdf_inv_func = approx_cdf_1d(
             bin_edges, pdf_array
         )

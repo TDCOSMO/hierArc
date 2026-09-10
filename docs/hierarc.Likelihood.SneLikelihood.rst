@@ -4,6 +4,22 @@ hierarc.Likelihood.SneLikelihood package
 Submodules
 ----------
 
+hierarc.Likelihood.SneLikelihood.des\_5yr module
+-------------------------------------------------
+
+.. automodule:: hierarc.Likelihood.SneLikelihood.des_5yr
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+hierarc.Likelihood.SneLikelihood.des\_5yr\_dovekie module
+-----------------------------------------------------------
+
+.. automodule:: hierarc.Likelihood.SneLikelihood.des_5yr_dovekie
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 hierarc.Likelihood.SneLikelihood.sne\_likelihood module
 -------------------------------------------------------
 

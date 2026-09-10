@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import truncnorm
 
 _SUPPORTED_DISTRIBUTIONS = ["GAUSSIAN", "GAUSSIAN_SCALED", "NONE"]
 _PARAMETERIZATION = ["q_intrinsic"]
@@ -52,7 +53,22 @@ class DeprojectionDistribution(object):
         ), self._kwargs_max.get("q_intrinsic", 1.0)
 
     def draw_deprojection(self, q_intrinsic=None, q_intrinsic_sigma=0):
-        """Draw Gaussian distribution and re-sample if outside bounds.
+        """Draw from the population distribution, restricted to the interpolated range.
+
+        The bounds are those of *this lens's* q_intrinsic grid, which the pre-processing
+        caps at the observed q_mass of the lens. The sampled q_intrinsic, on the other
+        hand, is the mean of the population, and a population mean is not required to lie
+        inside the support of every member: what has to stay inside the grid is the value
+        the kinematics scaling J is interpolated at, i.e. the draw.
+
+        So the mean is only required to be inside the range when it *is* the value handed
+        to the interpolator - no distribution, or a distribution of zero width. With a
+        distribution of finite width the draw is taken from the normal truncated to the
+        range, which is the same law rejection sampling defines and the same one the
+        deterministic rule integrates (QuadratureMarginalisation, whose weights
+        Util.quadrature_util.truncated_normal_panels normalises over the same bounds).
+        Sampling it by its inverse CDF rather than by rejection also terminates when the
+        mean sits well outside the range, where rejection would recurse indefinitely.
 
         :param q_intrinsic: mean of the distribution
         :param q_intrinsic_sigma: std of the distribution
@@ -64,21 +80,27 @@ class DeprojectionDistribution(object):
             if q_intrinsic is not None:
                 kwargs_return["q_intrinsic"] = q
             return kwargs_return
-        if q <= self._q_min or q > self._q_max:
-            raise ValueError(
-                "deprojection parameter with %s is out of bounds of the interpolated range [%s, %s]!"
-                % (q, self._q_min, self._q_max)
-            )
         if self._distribution_function in ["GAUSSIAN", "GAUSSIAN_SCALED"]:
             if self._distribution_function in ["GAUSSIAN"]:
-                q_draw = np.random.normal(q_intrinsic, q_intrinsic_sigma)
-            elif self._distribution_function in ["GAUSSIAN_SCALED"]:
-                q_draw = np.random.normal(q_intrinsic, q_intrinsic_sigma * q_intrinsic)
-            if q_draw <= self._q_min or q_draw > self._q_max:
-                return self.draw_deprojection(q_intrinsic, q_intrinsic_sigma)
-            kwargs_return["q_intrinsic"] = q_draw
+                sigma = q_intrinsic_sigma
+            else:
+                sigma = q_intrinsic_sigma * q_intrinsic
         else:
+            sigma = 0
+        if sigma <= 0:
+            # the mean itself reaches the interpolator
+            if q <= self._q_min or q > self._q_max:
+                raise ValueError(
+                    "deprojection parameter with %s is out of bounds of the interpolated range [%s, %s]!"
+                    % (q, self._q_min, self._q_max)
+                )
             kwargs_return["q_intrinsic"] = q
+            return kwargs_return
+        a = (self._q_min - q_intrinsic) / sigma
+        b = (self._q_max - q_intrinsic) / sigma
+        kwargs_return["q_intrinsic"] = float(
+            truncnorm.rvs(a, b, loc=q_intrinsic, scale=sigma)
+        )
         return kwargs_return
 
     def get_deprojection_sampling_params(self, kwargs_kin):
